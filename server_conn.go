@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +14,10 @@ import (
 	"github.com/googollee/go-engine.io/parser"
 	"github.com/googollee/go-engine.io/transport"
 )
+
+func debug(fmt string, args ...interface{}) {
+	log.Printf(time.Now().Format(time.RFC1123)+" [engine.io] "+fmt+"\n", args...)
+}
 
 type MessageType message.MessageType
 
@@ -77,8 +82,11 @@ type serverConn struct {
 	readerChan      chan *connReader
 	pingTimeout     time.Duration
 	pingInterval    time.Duration
-	pingChan        chan bool
-	pingLocker      sync.Mutex
+
+	// when the client pings the server, the channel will be used for updating the last response time.
+	pingChan   chan bool
+	pingLocker sync.Mutex
+	lastActive time.Time
 }
 
 var InvalidError = errors.New("invalid transport")
@@ -99,6 +107,7 @@ func newServerConn(id string, w http.ResponseWriter, r *http.Request, callback s
 		pingInterval: callback.configure().PingInterval,
 		pingChan:     make(chan bool),
 	}
+
 	transport, err := creater.Server(w, r, ret)
 	if err != nil {
 		return nil, err
@@ -359,28 +368,18 @@ func (c *serverConn) setState(state state) {
 
 func (c *serverConn) pingLoop() {
 	lastPing := time.Now()
-	lastTry := lastPing
 	for {
 		now := time.Now()
 		pingDiff := now.Sub(lastPing)
-		tryDiff := now.Sub(lastTry)
+		pingTimeout := time.After(c.pingTimeout - pingDiff)
 		select {
-		case ok := <-c.pingChan:
+		// pingChan sometimes will be closed by OnClose event
+		case _, ok := <-c.pingChan:
 			if !ok {
 				return
 			}
 			lastPing = time.Now()
-			lastTry = lastPing
-		case <-time.After(c.pingInterval - tryDiff):
-			c.writerLocker.Lock()
-			if w, _ := c.getCurrent().NextWriter(message.MessageText, parser.PING); w != nil {
-				writer := newConnWriter(w, &c.writerLocker)
-				writer.Close()
-			} else {
-				c.writerLocker.Unlock()
-			}
-			lastTry = time.Now()
-		case <-time.After(c.pingTimeout - pingDiff):
+		case <-pingTimeout:
 			c.Close()
 			return
 		}
