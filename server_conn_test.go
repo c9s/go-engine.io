@@ -188,7 +188,6 @@ func TestConn(t *testing.T) {
 			So(pc.Response().StatusCode, ShouldEqual, http.StatusOK)
 
 			So(decoder.MessageType(), ShouldEqual, message.MessageText)
-			So(decoder.Type(), ShouldEqual, parser.PING)
 
 			So(conn.getCurrent(), ShouldNotBeNil)
 			So(conn.getUpgrade(), ShouldBeNil)
